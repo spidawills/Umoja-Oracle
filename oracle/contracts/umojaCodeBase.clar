@@ -1,4 +1,4 @@
-;; DeFi Oracle Verification Network: Intermediate Oracle Network with Embargo Periods
+;; DeFi Oracle Verification Network: Full Oracle Network with Verification Records
 
 ;; Constants
 (define-constant ERR-NOT-NETWORK-CONTROLLER (err u1))
@@ -10,6 +10,7 @@
 (define-constant ERR-INSUFFICIENT-DEPOSIT (err u7))
 (define-constant ERR-INVALID-INPUT (err u8))
 (define-constant ERR-FEED-EXISTS (err u9))
+(define-constant MAX-FEED-ID u100) ;; Maximum allowed feed ID
 
 ;; Data Variables
 (define-data-var network-controller principal tx-sender)
@@ -51,6 +52,12 @@
     }
 )
 
+;; Events
+(define-map verification-records
+    uint
+    (list 10 {verifier: principal, block-height: uint})
+)
+
 ;; Authorization
 (define-private (is-controller)
     (is-eq tx-sender (var-get network-controller)))
@@ -81,6 +88,9 @@
     (incentive uint))
     (begin
         (asserts! (is-controller) ERR-NOT-NETWORK-CONTROLLER)
+        
+        ;; Validate feed-id is within acceptable range
+        (asserts! (<= feed-id MAX-FEED-ID) ERR-INVALID-INPUT)
         
         ;; Check if feed already exists to prevent overwriting
         (asserts! (is-none (map-get? price-feeds feed-id)) ERR-FEED-EXISTS)
@@ -173,6 +183,16 @@
                 ;; Distribute incentive
                 (try! (stx-transfer? (get incentive feed) (var-get network-controller) tx-sender))
                 
+                ;; Record success
+                (match (map-get? verification-records feed-id)
+                    records (map-set verification-records feed-id
+                        (unwrap! (as-max-len?
+                            (append records {verifier: tx-sender, block-height: current-height})
+                            u10)
+                            ERR-INVALID-FEED))
+                    (map-set verification-records feed-id
+                        (list {verifier: tx-sender, block-height: current-height})))
+                
                 (ok true))
             ERR-INVALID-VERIFICATION-SIGNATURE)))
 
@@ -186,6 +206,9 @@
 
 (define-read-only (get-verifier-profile (verifier principal))
     (map-get? verifier-stats verifier))
+
+(define-read-only (get-verification-history (feed-id uint))
+    (map-get? verification-records feed-id))
 
 (define-read-only (get-current-checkpoint)
     (var-get last-checkpoint))
